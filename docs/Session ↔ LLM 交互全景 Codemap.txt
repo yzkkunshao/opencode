@@ -1,0 +1,139 @@
+⏺ Session ↔ LLM 交互全景 Codemap
+
+  完整调用链
+
+  用户输入
+    │
+    ▼
+  SessionPrompt.prompt()                          ←
+  packages/opencode/src/session/prompt.ts:1273
+    │  创建 Session, 设置权限
+    ▼
+  createUserMessage()                             ←
+  packages/opencode/src/session/prompt.ts:915
+    │  resolvePart() 解析 text/file/agent 等 Part 类型
+    │  构建 MessageV2.User + Parts
+    ▼
+  SessionPrompt.loop()                            ←
+  packages/opencode/src/session/prompt.ts:1531
+    │
+    ▼
+  runLoop() ─ while(true) ─────────────────────── ←
+  packages/opencode/src/session/prompt.ts:1302
+    │
+    ├─① filterCompacted()                        ←
+  packages/opencode/src/session/message-v2.ts:927
+    │     加载历史消息，过滤已压缩的
+    │
+    ├─② Agent / Model 解析                       ←
+  packages/opencode/src/agent/agent.ts:70
+    │     获取当前 Agent 定义和 Model 配置
+    │
+    ├─③ Subtask / Compaction 处理
+    │     ├─ handleSubtask()                     ←
+  packages/opencode/src/session/prompt.ts:521
+    │     └─ processCompaction()                 ←
+  packages/opencode/src/session/compaction.ts:141
+    │
+    ├─④ resolveTools()                           ←
+  packages/opencode/src/session/prompt.ts:351
+    │     注册内置工具 + MCP 工具，按权限过滤
+    │
+    ├─⑤ 构建 System Prompt                      ←
+  packages/opencode/src/session/system.ts
+    │     provider() + environment() + skills()
+    │
+    ├─⑥ MessageV2 → ModelMessages                ←
+  packages/opencode/src/session/message-v2.ts:814
+    │     toModelMessagesEffect() 转换消息格式
+    │
+    ├─⑦ Processor.create() + process()           ←
+  packages/opencode/src/session/processor.ts
+    │     │
+    │     ├─ LLM.stream()                        ←
+  packages/opencode/src/session/llm.ts:84
+    │     │    streamText() + wrapLanguageModel()
+    │     │
+    │     ├─ handleEvent()                       ←
+  packages/opencode/src/session/processor.ts:214
+    │     │    处理流式事件: text-delta, tool-call,
+    │     │    tool-result, reasoning 等
+    │     │
+    │     └─ 判断循环结果:
+    │          "break"  → 正常结束
+    │          "compact" → 触发压缩后继续
+    │          "stop"   → 错误/权限拒绝
+    │
+    └─ 回到 ①，继续循环或退出
+
+  ---
+  涉及模块清单
+
+  ┌───────┬────────────────────────┬────────────────────────────────────────┐
+  │ 模块  │        文件路径        │                核心职责                │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ Sessi │ packages/opencode/src/ │ 入口编排：prompt/loop/runLoop/createUs │
+  │ on Pr │ session/prompt.ts      │ erMessage/resolveTools/handleSubtask   │
+  │ ompt  │                        │                                        │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ Messa │ packages/opencode/src/ │ 消息模型：filterCompacted/toModelMessa │
+  │ ge V2 │ session/message-v2.ts  │ gesEffect                              │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ Proce │ packages/opencode/src/ │ 流式处理：create/process/handleEvent   │
+  │ ssor  │ session/processor.ts   │                                        │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ LLM   │ packages/opencode/src/ │ LLM 调用：stream/streamText/wrapLangua │
+  │       │ session/llm.ts         │ geModel                                │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ Syste │ packages/opencode/src/ │ 系统提示构建：provider/environment/ski │
+  │ m Pro │ session/system.ts      │ lls                                    │
+  │ mpt   │                        │                                        │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ Compa │ packages/opencode/src/ │ 对话压缩：processCompaction            │
+  │ ction │ session/compaction.ts  │                                        │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ Agent │ packages/opencode/src/ │ Agent 定义：build/plan/general/explore │
+  │       │ agent/agent.ts         │ /compaction                            │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ Tool  │ packages/opencode/src/ │                                        │
+  │ Regis │ tool/registry.ts       │ 工具注册与管理                         │
+  │ try   │                        │                                        │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ Provi │ packages/opencode/src/ │ LLM Provider 抽象层（20+ 提供商）      │
+  │ der   │ provider/provider.ts   │                                        │
+  ├───────┼────────────────────────┼────────────────────────────────────────┤
+  │ Permi │ packages/opencode/src/ │                                        │
+  │ ssion │ session/prompt.ts      │ 权限系统：allow/deny/ask 三级控制      │
+  │       │ (内嵌)                 │                                        │
+  └───────┴────────────────────────┴────────────────────────────────────────┘
+
+  ---
+  技术框架与库
+
+  框架/库: Effect
+  用途: 全局核心：依赖注入(Layer)、错误处理(Effect.gen)、资源管理、并发控制
+  ────────────────────────────────────────
+  框架/库: Zod
+  用途: Schema 校验：消息结构、工具参数、Provider 配置
+  ────────────────────────────────────────
+  框架/库: AI SDK (Vercel)
+  用途: LLM 统一接口：streamText()、ModelMessage 格式、工具调用协议
+  ────────────────────────────────────────
+  框架/库: Hono
+  用途: HTTP Server（Session 通过此对外暴露 API）
+  ────────────────────────────────────────
+  框架/库: Drizzle ORM
+  用途: SQLite 持久化：Session/Message 存储
+  ────────────────────────────────────────
+  框架/库: SolidJS
+  用途: TUI/Web 渲染层（Session 状态驱动 UI 更新）
+  ────────────────────────────────────────
+  框架/库: MCP (Model Context Protocol)
+  用途: 外部工具集成协议
+
+  关键设计特征：
+  - Effect 贯穿全流程，无 try/catch，所有副作用通过 Effect 编排
+  - 消息模型使用 MessageV2 内部格式，调用 LLM 前转换为 AI SDK 的 ModelMessage
+  - 工具系统采用注册制，按 Agent 权限动态过滤可用工具集
+  - 对话压缩(compaction)在 token 超限时触发，生成摘要替代历史消息
+
